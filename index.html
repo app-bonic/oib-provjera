@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="hr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Provjera OIB-a i IBAN-a</title>
+<meta name="description" content="Provjera ispravnosti OIB-a po kontrolnoj znamenci (ISO 7064, MOD 11,10), provjera cijelog popisa i IBAN-a. Radi u pregledniku, podaci se ne šalju.">
+<link rel="icon" href="zajednicko/logo.svg">
+<link rel="stylesheet" href="zajednicko/app-bonic.css">
+<style>
+  .veliko-polje { font-size: 26px; letter-spacing: .12em; padding: 14px 16px; font-family: ui-monospace, Consolas, monospace; }
+  .rezultat { margin-top: 14px; display: flex; flex-direction: column; gap: 12px; }
+  .znamenke { display: flex; flex-wrap: wrap; gap: 4px; }
+  .znamenke span { width: 30px; height: 38px; display: grid; place-items: center; border-radius: 7px; background: var(--polje); border: 1px solid var(--crta); font: 600 17px ui-monospace, Consolas, monospace; }
+  .znamenke span.kontrolna { border-color: var(--akcent); background: var(--akcent-meko); color: var(--akcent-jak); }
+  .znamenke span.krivo { border-color: var(--greska); background: var(--greska-meko); color: var(--greska); }
+  details.postupak summary { cursor: pointer; font-weight: 600; font-size: 14px; color: var(--akcent-jak); }
+  .koraci { font-size: 13px; margin-top: 8px; }
+  .koraci td, .koraci th { text-align: center; padding: 4px 8px; }
+  .brojke { display: flex; gap: 8px; flex-wrap: wrap; margin: 10px 0; }
+  td.ok { color: var(--ok); font-weight: 600; } td.ne { color: var(--greska); font-weight: 600; }
+</style>
+</head>
+<body data-alat="oib-provjera">
+<header class="ab-vrh"></header>
+
+<main class="ab-omot">
+  <section class="ab-uvod">
+    <span class="ab-ikona"><span data-ik="oib"></span></span>
+    <div>
+      <h1>Provjera OIB-a i IBAN-a</h1>
+      <p>Provjerava je li OIB ispravno napisan — računa kontrolnu (11.) znamenku po normi ISO 7064, MOD 11,10. Alat ne provjerava pripada li OIB stvarnoj osobi, samo je li broj matematički ispravan.</p>
+    </div>
+  </section>
+
+  <div class="stupci">
+    <div class="slog">
+      <section class="kartica">
+        <h2>Jedan OIB</h2>
+        <input id="oib" class="veliko-polje" inputmode="numeric" maxlength="14" placeholder="12345678901" autocomplete="off" aria-label="OIB">
+        <div class="rezultat" id="rezultat"></div>
+      </section>
+
+      <section class="kartica">
+        <h2>IBAN</h2>
+        <input id="iban" class="mono" placeholder="HR12 1001 0051 8630 0016 0" autocomplete="off" spellcheck="false" aria-label="IBAN">
+        <div class="rezultat" id="ibanRezultat"></div>
+      </section>
+
+      <section class="kartica">
+        <h2>Testni OIB-ovi</h2>
+        <p class="napomena">Nasumični, matematički ispravni brojevi za testiranje programa i obrazaca. Ne koristi ih kao stvarne OIB-ove.</p>
+        <div class="gumbi" style="margin-top:10px">
+          <button type="button" class="gumb" id="generiraj"><span data-ik="osvjezi"></span>Generiraj 10</button>
+          <button type="button" class="gumb tekstualni" id="kopirajTestne" hidden><span data-ik="kopiraj"></span>Kopiraj</button>
+        </div>
+        <pre class="mono" id="testni" style="margin:10px 0 0;white-space:pre-wrap"></pre>
+      </section>
+    </div>
+
+    <section class="kartica">
+      <h2>Provjera cijelog popisa</h2>
+      <p class="napomena">Zalijepi OIB-ove, svaki u svoj redak (ili stupac iz Excela). Tekst uz OIB se zanemaruje — pronalaze se svi nizovi od 11 znamenaka.</p>
+      <textarea id="popis" rows="10" class="mono" placeholder="Ivan Horvat	12345678903&#10;69435151530&#10;..." style="margin-top:10px"></textarea>
+      <div class="brojke" id="brojke"></div>
+      <div class="gumbi" id="popisGumbi" hidden>
+        <button type="button" class="gumb" id="izvoz"><span data-ik="preuzmi"></span>Rezultat u CSV</button>
+        <button type="button" class="gumb" id="kopirajIspravne"><span data-ik="kopiraj"></span>Kopiraj ispravne</button>
+        <button type="button" class="gumb" id="kopirajNeispravne"><span data-ik="kopiraj"></span>Kopiraj neispravne</button>
+      </div>
+      <div class="tablica-omot" id="tablicaOmot" hidden style="margin-top:12px"><table class="tablica"><thead><tr><th>#</th><th>OIB</th><th>Rezultat</th><th>Napomena</th></tr></thead><tbody id="tijelo"></tbody></table></div>
+    </section>
+  </div>
+</main>
+
+<footer class="ab-dno"></footer>
+<script src="zajednicko/app-bonic.js"></script>
+<script>
+'use strict';
+const { $, esc, ikona, kopiraj, spremi } = AB;
+
+// ISO 7064, MOD 11,10
+function kontrolna(deset) {
+  let a = 10;
+  const koraci = [];
+  for (const c of deset) {
+    const zbroj = (a + +c) % 10 || 10;
+    const novi = (zbroj * 2) % 11;
+    koraci.push([c, a, zbroj, novi]);
+    a = novi;
+  }
+  const k = (11 - a) % 10;
+  return { k, koraci, zadnji: a };
+}
+function provjeriOib(v) {
+  const s = String(v).replace(/\s/g, '');
+  if (!s) return { stanje: 'prazno' };
+  if (!/^\d+$/.test(s)) return { stanje: 'ne', s, razlog: 'OIB smije sadržavati samo znamenke.' };
+  if (s.length !== 11) return { stanje: 'ne', s, razlog: `OIB ima 11 znamenaka (upisano ${s.length}).` };
+  const r = kontrolna(s.slice(0, 10));
+  if (r.k !== +s[10]) return { stanje: 'ne', s, r, razlog: `Kontrolna znamenka treba biti ${r.k}, a upisana je ${s[10]}.` };
+  return { stanje: 'da', s, r };
+}
+
+function prikaziJedan() {
+  const p = provjeriOib($('#oib').value), el = $('#rezultat');
+  if (p.stanje === 'prazno') { el.innerHTML = ''; return; }
+  const znamenke = p.s && /^\d{11}$/.test(p.s)
+    ? `<div class="znamenke">${[...p.s].map((z, i) => `<span class="${i === 10 ? (p.stanje === 'da' ? 'kontrolna' : 'krivo') : ''}">${z}</span>`).join('')}</div>` : '';
+  const postupak = p.r ? `<details class="postupak"><summary>Kako je izračunato</summary>
+      <table class="tablica koraci"><thead><tr><th>Znamenka</th><th>Međuzbroj</th><th>(međuzbroj + znamenka) mod 10</th><th>× 2 mod 11</th></tr></thead>
+      <tbody>${p.r.koraci.map(([c, a, z, n]) => `<tr><td>${c}</td><td>${a}</td><td>${z}</td><td>${n}</td></tr>`).join('')}</tbody></table>
+      <p class="napomena" style="margin-top:6px">Kontrolna znamenka = 11 − ${p.r.zadnji} = ${11 - p.r.zadnji}${11 - p.r.zadnji === 10 ? ' → 0' : ''}.</p></details>` : '';
+  el.innerHTML = znamenke + (p.stanje === 'da'
+    ? `<div class="poruka ok">${ikona('kvacica')}<span><b>OIB je ispravan.</b> Kontrolna znamenka ${p.s[10]} odgovara.</span></div>`
+    : `<div class="poruka greska">${ikona('oprez')}<span><b>OIB nije ispravan.</b> ${esc(p.razlog)}</span></div>`) + postupak;
+  $('#oib').classList.toggle('neispravno', p.stanje === 'ne' && p.s.length >= 11);
+}
+
+function provjeriIban(v) {
+  const i = String(v).replace(/[\s-]/g, '').toUpperCase();
+  if (!i) return null;
+  if (!/^[A-Z]{2}\d{2}[A-Z0-9]{8,30}$/.test(i)) return { ok: false, i, razlog: 'IBAN počinje s dva slova države i dvije kontrolne znamenke, a zatim slijede slova i brojke.' };
+  if (i.startsWith('HR') && i.length !== 21) return { ok: false, i, razlog: `Hrvatski IBAN ima 21 znak (upisano ${i.length}).` };
+  let o = 0;
+  for (const c of i.slice(4) + i.slice(0, 4)) for (const d of (c >= 'A' ? String(c.charCodeAt(0) - 55) : c)) o = (o * 10 + +d) % 97;
+  if (o !== 1) return { ok: false, i, razlog: 'Kontrolni broj ne odgovara — vjerojatno je neka znamenka krivo prepisana.' };
+  return { ok: true, i };
+}
+function prikaziIban() {
+  const r = provjeriIban($('#iban').value), el = $('#ibanRezultat');
+  if (!r) { el.innerHTML = ''; return; }
+  const lijepo = r.i.replace(/(.{4})/g, '$1 ').trim();
+  el.innerHTML = r.ok
+    ? `<div class="poruka ok">${ikona('kvacica')}<span><b>IBAN je ispravan.</b><br><span class="mono">${esc(lijepo)}</span>${r.i.startsWith('HR') ? `<br>Vodeći broj banke (VBDI): <b class="mono">${r.i.slice(4, 11)}</b> · broj računa: <b class="mono">${r.i.slice(11)}</b>` : ''}</span></div>`
+    : `<div class="poruka greska">${ikona('oprez')}<span><b>IBAN nije ispravan.</b> ${esc(r.razlog)}</span></div>`;
+}
+
+let rezultati = [];
+function prikaziPopis() {
+  const tekst = $('#popis').value;
+  // nizovi od 9 do 13 znamenaka (kraći/dulji su datumi, iznosi, IBAN-i…)
+  const nadeni = (tekst.match(/\d+/g) || []).filter(x => x.length >= 9 && x.length <= 13);
+  rezultati = nadeni.map(s => ({ s, ...provjeriOib(s) }));
+  const vidjeno = new Map();
+  rezultati.forEach(r => vidjeno.set(r.s, (vidjeno.get(r.s) || 0) + 1));
+  const ok = rezultati.filter(r => r.stanje === 'da').length, dupl = [...vidjeno.values()].filter(n => n > 1).length;
+  $('#brojke').innerHTML = rezultati.length ? `<span class="pilula">${rezultati.length} ukupno</span><span class="pilula ok">${ok} ispravnih</span><span class="pilula greska">${rezultati.length - ok} neispravnih</span>${dupl ? `<span class="pilula">${dupl} ponavljanja</span>` : ''}` : '';
+  $('#tijelo').innerHTML = rezultati.map((r, i) => `<tr><td>${i + 1}</td><td class="mono">${esc(r.s)}</td><td class="${r.stanje === 'da' ? 'ok' : 'ne'}">${r.stanje === 'da' ? 'ispravan' : 'neispravan'}</td><td>${esc(r.razlog || (vidjeno.get(r.s) > 1 ? 'ponavlja se' : ''))}</td></tr>`).join('');
+  $('#tablicaOmot').hidden = $('#popisGumbi').hidden = !rezultati.length;
+}
+
+function generiraj() {
+  const out = [];
+  const b = new Uint8Array(10);
+  for (let n = 0; n < 10; n++) {
+    crypto.getRandomValues(b);
+    let d = [...b].map(x => x % 10);
+    if (d[0] === 0) d[0] = 1 + (b[0] % 9);
+    const s = d.join('');
+    out.push(s + kontrolna(s).k);
+  }
+  $('#testni').textContent = out.join('\n');
+  $('#kopirajTestne').hidden = false;
+}
+
+$('#oib').addEventListener('input', prikaziJedan);
+$('#iban').addEventListener('input', prikaziIban);
+$('#popis').addEventListener('input', prikaziPopis);
+$('#generiraj').onclick = generiraj;
+$('#kopirajTestne').onclick = () => kopiraj($('#testni').textContent);
+$('#kopirajIspravne').onclick = () => kopiraj(rezultati.filter(r => r.stanje === 'da').map(r => r.s).join('\n'), 'Ispravni OIB-ovi kopirani.');
+$('#kopirajNeispravne').onclick = () => kopiraj(rezultati.filter(r => r.stanje !== 'da').map(r => r.s).join('\n'), 'Neispravni OIB-ovi kopirani.');
+$('#izvoz').onclick = () => {
+  const csv = '﻿OIB;Rezultat;Napomena\r\n' + rezultati.map(r => `${r.s};${r.stanje === 'da' ? 'ispravan' : 'neispravan'};${(r.razlog || '').replace(/;/g, ',')}`).join('\r\n');
+  spremi(new Blob([csv], { type: 'text/csv;charset=utf-8' }), 'provjera-oib.csv');
+};
+</script>
+</body>
+</html>
